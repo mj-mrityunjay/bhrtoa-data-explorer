@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell, AreaChart, Area
+  PieChart, Pie, Cell, AreaChart, Area, LineChart, Line
 } from 'recharts';
 import { 
   LayoutDashboard, Map as MapIcon, TrendingUp, ListTodo, AlertTriangle, 
-  CheckCircle, Clock, Upload, Search, Building, Save, Download, CalendarRange, Trash2, Filter, Camera, ArrowLeft, ExternalLink
+  CheckCircle, Clock, Upload, Search, Building, Save, Download, CalendarRange, Trash2, Filter, Camera, ArrowLeft, ExternalLink, Activity
 } from 'lucide-react';
 
 // --- ROBUST CSV PARSER ---
@@ -120,14 +120,14 @@ const processNBHTickets = (rows) => {
     return data;
 };
 
-// Default setup with 8 zones
+// Start with empty arrays - Blocks will be auto-assigned dynamically 
 const DEFAULT_ZONES = {
-  'Zone 1': ['14A', '18A'],
-  'Zone 2': ['24B', '28B'],
-  'Zone 3': ['33B', '36A'],
-  'Zone 4': ['37B', '39A'],
-  'Zone 5': ['46B', '57'],
-  'Zone 6': ['PHARMACY'],
+  'Zone 1': [],
+  'Zone 2': [],
+  'Zone 3': [],
+  'Zone 4': [],
+  'Zone 5': [],
+  'Zone 6': [],
   'Zone 7': [],
   'Zone 8': []
 };
@@ -139,7 +139,7 @@ const mockTickets = [
   { id: '13980', block: '46B', unit: '46B-310', category: 'INTERNAL', subCategory: 'NON_EMERGENCY_CARPENTRYPAID', priority: 'HIGH', state: 'CLOSED', created: '2026-02-08', createdBy: 'Girinath', description: 'Kichen door is stuck.', tatHours: 148.2 },
 ];
 
-const COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'];
+const COLORS = ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b', '#0284c7', '#dc2626'];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -157,6 +157,7 @@ export default function App() {
   const [filterCategory, setFilterCategory] = useState('ALL');
   const [filterSubCategory, setFilterSubCategory] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterDate, setFilterDate] = useState('ALL');
   
   const [isMockData, setIsMockData] = useState(true);
   const [loadedDateRanges, setLoadedDateRanges] = useState([]);
@@ -258,7 +259,6 @@ export default function App() {
     
     try {
         const readPromises = files.map(file => {
-            // Use resolve instead of reject so a single bad file doesn't break Promise.all
             return new Promise((resolve) => {
                 const reader = new FileReader();
 
@@ -266,8 +266,6 @@ export default function App() {
                     try {
                         const data = new Uint8Array(e.target.result);
                         
-                        // Smart validation: Check if file is truly a ZIP archive (real Excel file) 
-                        // by looking for the "PK" magic bytes at the start of the file.
                         const isRealZip = data.length > 2 && data[0] === 80 && data[1] === 75;
 
                         if (isRealZip) {
@@ -282,16 +280,13 @@ export default function App() {
                                 const jsonRows = window.XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: "" });
                                 resolve(jsonRows);
                             } catch (xlsxErr) {
-                                // Gracefully skip corrupted XLSX files that cause 'Bad uncompressed size' or 'Map2' crashes
                                 console.warn(`Skipped ${file.name} due to Excel parsing error (corrupted file):`, xlsxErr);
                                 resolve([]);
                             }
                         } else {
-                            // If it's not a ZIP, treat it as plain text (CSV or HTML disguised as XLS).
                             const decoder = new TextDecoder('utf-8');
                             const text = decoder.decode(data);
                             
-                            // Check if it's actually an HTML file disguised as .xls
                             const lowerText = text.slice(0, 500).trim().toLowerCase();
                             if (lowerText.startsWith('<html') || lowerText.startsWith('<table') || lowerText.startsWith('<!doctype html')) {
                                 try {
@@ -305,11 +300,9 @@ export default function App() {
                                     resolve([]);
                                 }
                             } else if (text.slice(0, 1000).includes('\x00')) {
-                                // Basic binary check: if it contains null bytes, it's not a valid CSV (likely a PDF/Image attachment)
                                 console.warn(`Skipped ${file.name}: Appears to be an unsupported binary attachment.`);
                                 resolve([]);
                             } else {
-                                // Treat as standard CSV
                                 const rows = parseCSV(text).filter(r => r.length > 0 && r.some(c => c && c.trim() !== ''));
                                 if (rows.length === 0) return resolve([]);
 
@@ -337,7 +330,6 @@ export default function App() {
                     resolve([]);
                 };
                 
-                // Read everything as ArrayBuffer first so we can check the magic bytes
                 reader.readAsArrayBuffer(file);
             });
         });
@@ -345,7 +337,6 @@ export default function App() {
         const fileContentsArray = await Promise.all(readPromises);
         let allNewTickets = [];
 
-        // Parse each file and collect valid tickets
         for (const jsonRows of fileContentsArray) {
             if (jsonRows && jsonRows.length > 0) {
                 const newTickets = processNBHTickets(jsonRows);
@@ -354,16 +345,13 @@ export default function App() {
         }
 
         if (allNewTickets.length > 0) {
-            // Deduplicate and MERGE tickets to enrich them with data from all reports
             const baseTickets = isMockData ? [] : tickets;
             const uniqueTicketsMap = new Map();
             
-            // Seed map with existing tickets
             baseTickets.forEach(t => uniqueTicketsMap.set(t.id, t));
 
             allNewTickets.forEach(t => {
                 if (uniqueTicketsMap.has(t.id)) {
-                    // Merge fields, preferring concrete data over "UNKNOWN" or "N/A"
                     const existing = uniqueTicketsMap.get(t.id);
                     const merged = { ...existing };
                     Object.keys(t).forEach(key => {
@@ -372,7 +360,7 @@ export default function App() {
                             if (!merged[key] || merged[key] === 'UNKNOWN' || merged[key] === 'N/A' || merged[key] === 'Unknown') {
                                 merged[key] = val;
                             } else if (key === 'tatHours' && val !== null) {
-                                merged[key] = val; // Prioritize concrete numbers
+                                merged[key] = val; 
                             }
                         }
                     });
@@ -386,7 +374,6 @@ export default function App() {
             setTickets(consolidatedTickets);
             setIsMockData(false);
 
-            // Update loaded date ranges
             const dateValues = consolidatedTickets
               .map(t => new Date(t.created).getTime())
               .filter(t => !isNaN(t));
@@ -418,6 +405,7 @@ export default function App() {
       setFilterZone('ALL');
       setFilterBlock('ALL');
       setFilterStatus('ALL');
+      setFilterDate('ALL');
       setSearchTerm('');
       setSelectedSubCategoryDetail(null);
     }
@@ -426,7 +414,6 @@ export default function App() {
   const handleExport = () => {
     if (tickets.length === 0) return;
     
-    // Add new fields to the consolidated export
     const headers = [
       'Ticket ID', 'Created Date', 'Created By', 'Location', 'Zone', 
       'Category', 'Sub-Category', 'Priority', 'Status', 'Description', 'TAT (Hrs)'
@@ -434,7 +421,6 @@ export default function App() {
     const csvRows = [headers.join(',')];
 
     tickets.forEach(t => {
-      // Clean Description to ensure CSV doesn't break
       const cleanDesc = t.description ? String(t.description).replace(/"/g, '""') : '';
       
       const row = [
@@ -475,16 +461,14 @@ export default function App() {
     if (!element) return;
     
     try {
-      // Hide buttons temporarily so they aren't captured in the screenshot
       const exportBtns = element.querySelectorAll('.export-btn-hide');
       exportBtns.forEach(btn => btn.style.display = 'none');
 
       const canvas = await window.html2canvas(element, { 
-        backgroundColor: '#f8fafc', // match the slate-50 background
-        scale: 2, // high resolution
+        backgroundColor: '#f8fafc',
+        scale: 2, 
       }); 
       
-      // Restore buttons
       exportBtns.forEach(btn => btn.style.display = '');
 
       const image = canvas.toDataURL("image/png");
@@ -499,14 +483,15 @@ export default function App() {
   };
 
   // --- DRILL DOWN HANDLERS ---
-  const drillDownToRegistry = (filterType, value) => {
+  const drillDownToRegistry = (filters = {}) => {
     setActiveTab('tickets');
-    setSelectedSubCategoryDetail(null); // Clear detail view if active
-    if (filterType === 'zone') setFilterZone(value);
-    if (filterType === 'block') setFilterBlock(value);
-    if (filterType === 'category') setFilterCategory(value);
-    if (filterType === 'subCategory') setFilterSubCategory(value);
-    if (filterType === 'status') setFilterStatus(value);
+    setSelectedSubCategoryDetail(null); 
+    setFilterZone(filters.zone || 'ALL');
+    setFilterBlock(filters.block || 'ALL');
+    setFilterCategory(filters.category || 'ALL');
+    setFilterSubCategory(filters.subCategory || 'ALL');
+    setFilterStatus(filters.status || 'ALL');
+    setFilterDate(filters.date || 'ALL');
   };
 
   // --- DATA PROCESSING ---
@@ -514,6 +499,51 @@ export default function App() {
     const blocks = new Set(tickets.map(t => t.block).filter(Boolean));
     return Array.from(blocks).sort();
   }, [tickets]);
+
+  // --- AUTO ZONE ASSIGNMENT LOGIC ---
+  useEffect(() => {
+    setZoneConfig(prevConfig => {
+      let hasChanges = false;
+      const newConfig = { ...prevConfig };
+      
+      uniqueBlocks.forEach(block => {
+        let isAssigned = false;
+        Object.values(newConfig).forEach(blocks => {
+          if (blocks.includes(block)) isAssigned = true;
+        });
+        
+        if (!isAssigned) {
+          let targetZone = null;
+          
+          if (block.toUpperCase().includes('PHARMACY')) {
+              targetZone = 'Zone 6';
+          } else {
+              const numMatch = block.match(/\d+/);
+              if (numMatch) {
+                  const num = parseInt(numMatch[0], 10);
+                  if (num >= 1 && num <= 13 && num !== 9) targetZone = 'Zone 1';
+                  else if (num === 9 || (num >= 14 && num <= 17)) targetZone = 'Zone 2';
+                  else if (num >= 18 && num <= 24) targetZone = 'Zone 3';
+                  else if (num >= 27 && num <= 32) targetZone = 'Zone 4';
+                  else if (num >= 46 && num <= 49) targetZone = 'Zone 5';
+                  else if (num >= 50 && num <= 64) targetZone = 'Zone 6';
+                  else if (num >= 33 && num <= 36) targetZone = 'Zone 7';
+                  else if (num >= 37 && num <= 41) targetZone = 'Zone 8';
+              }
+          }
+
+          if (targetZone) {
+              if (!newConfig[targetZone]) newConfig[targetZone] = [];
+              newConfig[targetZone] = [...newConfig[targetZone], block];
+              hasChanges = true;
+          }
+        }
+      });
+      
+      return hasChanges ? newConfig : prevConfig;
+    });
+  }, [uniqueBlocks]);
+
 
   const blockToZone = useMemo(() => {
     const mapping = {};
@@ -540,7 +570,7 @@ export default function App() {
   const categoryData = useMemo(() => {
     const counts = {};
     tickets.forEach(t => { counts[t.category] = (counts[t.category] || 0) + 1; });
-    return Object.entries(counts).map(([name, value]) => ({ name: name.replace('_', ' '), value })).sort((a,b) => b.value - a.value);
+    return Object.entries(counts).map(([name, value]) => ({ name: name.replace(/_/g, ' '), value })).sort((a,b) => b.value - a.value);
   }, [tickets]);
 
   const subCategoryData = useMemo(() => {
@@ -591,24 +621,53 @@ export default function App() {
     });
 
     return Object.entries(categoryTat).map(([category, totalTat]) => ({
-      category: category.replace('_', ' '),
+      category: category.replace(/_/g, ' '),
       avgTat: Math.round(totalTat / categoryCount[category])
     }));
   }, [tickets]);
 
-  const moveBlockToZone = (block, targetZone) => {
-    setZoneConfig(prev => {
-      const newConfig = { ...prev };
-      Object.keys(newConfig).forEach(z => {
-        newConfig[z] = newConfig[z].filter(b => b !== block);
-      });
-      if (targetZone !== 'Unassigned') {
-        if (!newConfig[targetZone]) newConfig[targetZone] = [];
-        newConfig[targetZone].push(block);
-      }
-      return newConfig;
+  // --- TREND DATA PROCESSING ---
+  const trendData = useMemo(() => {
+    const grouped = {};
+    tickets.forEach(t => {
+        if(!t.created || t.created === 'N/A') return;
+        const date = t.created;
+        if(!grouped[date]) {
+            grouped[date] = { date, total: 0, tatSum: 0, tatCount: 0, open: 0, closed: 0 };
+        }
+        grouped[date].total += 1;
+        
+        if (t.state === 'OPEN') grouped[date].open += 1;
+        if (t.state === 'CLOSED' || t.state === 'RESOLVED' || t.state === 'AUTO_CLOSE') grouped[date].closed += 1;
+        
+        if (t.tatHours !== null) {
+            grouped[date].tatSum += t.tatHours;
+            grouped[date].tatCount += 1;
+        }
+        
+        // Accumulate Categories
+        const cat = t.category.replace(/_/g, ' ');
+        grouped[date][cat] = (grouped[date][cat] || 0) + 1;
+        
+        // Accumulate SubCategories
+        if(t.subCategory && t.subCategory !== 'N/A') {
+            const subCat = t.subCategory.replace(/_/g, ' ');
+            grouped[date][`sub_${subCat}`] = (grouped[date][`sub_${subCat}`] || 0) + 1;
+        }
+        
+        // Accumulate Blocks
+        if(t.block && t.block !== 'Unknown' && t.block !== 'N/A') {
+            grouped[date][`blk_${t.block}`] = (grouped[date][`blk_${t.block}`] || 0) + 1;
+        }
     });
-  };
+    
+    return Object.values(grouped)
+        .sort((a,b) => a.date.localeCompare(b.date))
+        .map(d => ({
+            ...d,
+            avgTat: d.tatCount ? Math.round(d.tatSum / d.tatCount) : 0
+        }));
+  }, [tickets]);
 
   const getUniqueCategories = useMemo(() => {
     const cats = new Set(tickets.map(t => t.category));
@@ -624,6 +683,17 @@ export default function App() {
     const statuses = new Set(tickets.map(t => t.state));
     return Array.from(statuses).sort();
   }, [tickets]);
+
+  const getUniqueDates = useMemo(() => {
+    const dates = new Set(tickets.map(t => t.created).filter(d => d && d !== 'N/A'));
+    return Array.from(dates).sort((a,b) => b.localeCompare(a));
+  }, [tickets]);
+
+  // Extract Top Keys for Stacked Trend Charts
+  const topCategoriesKeys = useMemo(() => getUniqueCategories.map(c => c.replace(/_/g, ' ')), [getUniqueCategories]);
+  const topSubCategoriesKeys = useMemo(() => subCategoryData.slice(0, 10).map(c => c.name), [subCategoryData]);
+  const topBlocksKeys = useMemo(() => topBlocksData.slice(0, 10).map(b => b.name), [topBlocksData]);
+
 
   // --- SUB-CATEGORY DETAIL VIEW LOGIC ---
   const handleSubCategoryClick = (name) => {
@@ -662,6 +732,37 @@ export default function App() {
     };
   }, [selectedSubCategoryDetail, tickets, blockToZone]);
 
+  const moveBlockToZone = (block, targetZone) => {
+    setZoneConfig(prev => {
+      const newConfig = { ...prev };
+      Object.keys(newConfig).forEach(z => {
+        newConfig[z] = newConfig[z].filter(b => b !== block);
+      });
+      if (targetZone !== 'Unassigned') {
+        if (!newConfig[targetZone]) newConfig[targetZone] = [];
+        newConfig[targetZone].push(block);
+      }
+      return newConfig;
+    });
+  };
+
+  // Calculate the loaded date range for the header
+  const headerDateRange = useMemo(() => {
+    if (loadedDateRanges.length === 0) return '';
+    if (loadedDateRanges.length === 1) {
+        return `${loadedDateRanges[0].start} to ${loadedDateRanges[0].end}`;
+    }
+    
+    // Find min start and max end across all ranges
+    const allStarts = loadedDateRanges.map(r => r.start);
+    const allEnds = loadedDateRanges.map(r => r.end);
+    
+    const minStart = allStarts.reduce((min, curr) => curr < min ? curr : min, allStarts[0]);
+    const maxEnd = allEnds.reduce((max, curr) => curr > max ? curr : max, allEnds[0]);
+    
+    return `${minStart} to ${maxEnd}`;
+  }, [loadedDateRanges]);
+
 
   // --- VIEWS ---
   const renderSidebar = () => (
@@ -674,6 +775,9 @@ export default function App() {
       <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
         <button onClick={() => { setActiveTab('dashboard'); setSelectedSubCategoryDetail(null); }} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'dashboard' ? 'bg-blue-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
           <LayoutDashboard className="w-5 h-5" /><span>Dashboard</span>
+        </button>
+        <button onClick={() => { setActiveTab('trends'); setSelectedSubCategoryDetail(null); }} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'trends' ? 'bg-blue-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
+          <Activity className="w-5 h-5" /><span>Trend Analysis</span>
         </button>
         <button onClick={() => { setActiveTab('efficiency'); setSelectedSubCategoryDetail(null); }} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'efficiency' ? 'bg-blue-600 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
           <TrendingUp className="w-5 h-5" /><span>FM Efficiency</span>
@@ -704,18 +808,15 @@ export default function App() {
            </button>
          </div>
          
-         {!isMockData && loadedDateRanges.length > 0 && (
+         {/* Replaced Loaded Snapshot with single date range */}
+         {!isMockData && headerDateRange && (
            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 mt-3">
              <div className="flex items-center space-x-2 text-slate-400 mb-2">
                <CalendarRange className="w-4 h-4" />
-               <span className="text-xs font-semibold uppercase tracking-wider">Loaded Snapshot</span>
+               <span className="text-xs font-semibold uppercase tracking-wider">Loaded Data</span>
              </div>
-             <div className="space-y-1">
-               {loadedDateRanges.map((r, i) => (
-                 <div key={i} className="text-[10px] text-slate-500 bg-slate-900 px-2 py-1 rounded">
-                   {r.start} to {r.end}
-                 </div>
-               ))}
+             <div className="text-xs font-medium text-slate-300 bg-slate-900 px-2 py-1.5 rounded">
+                {headerDateRange}
              </div>
            </div>
          )}
@@ -747,7 +848,7 @@ export default function App() {
             </div>
             <div className="flex space-x-2">
               <button 
-                onClick={() => drillDownToRegistry('subCategory', selectedSubCategoryDetail.replace(/ /g, '_'))}
+                onClick={() => drillDownToRegistry({ subCategory: selectedSubCategoryDetail.replace(/ /g, '_') })}
                 className="export-btn-hide flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-sm text-sm font-medium transition-colors"
                 title="View these tickets in Registry"
               >
@@ -780,10 +881,7 @@ export default function App() {
                       fill="#f59e0b" 
                       radius={[0, 4, 4, 0]} 
                       barSize={20} 
-                      onClick={(data) => {
-                          setFilterSubCategory(selectedSubCategoryDetail.replace(/ /g, '_'));
-                          drillDownToRegistry('block', data.name);
-                      }}
+                      onClick={(data) => drillDownToRegistry({ subCategory: selectedSubCategoryDetail.replace(/ /g, '_'), block: data.name })}
                       className="cursor-pointer hover:opacity-80"
                   />
                 </BarChart>
@@ -800,10 +898,7 @@ export default function App() {
                   <Pie 
                       data={selectedSubCatStats.topZones} 
                       cx="50%" cy="50%" innerRadius={80} outerRadius={110} paddingAngle={2} dataKey="value"
-                      onClick={(data) => {
-                          setFilterSubCategory(selectedSubCategoryDetail.replace(/ /g, '_'));
-                          drillDownToRegistry('zone', data.name);
-                      }}
+                      onClick={(data) => drillDownToRegistry({ subCategory: selectedSubCategoryDetail.replace(/ /g, '_'), zone: data.name })}
                       className="cursor-pointer hover:opacity-80"
                   >
                     {selectedSubCatStats.topZones.map((entry, index) => (
@@ -832,12 +927,15 @@ export default function App() {
         <div className="flex justify-between items-center">
           <div>
             <h2 className="text-2xl font-bold text-slate-800">Overview Dashboard</h2>
-            <p className="text-slate-500 mt-1">Consolidated view of all loaded time periods.</p>
+            <p className="text-slate-500 mt-1">
+               {headerDateRange ? `Data from ${headerDateRange}` : 'Consolidated view of all loaded time periods.'}
+            </p>
           </div>
           <div className="flex items-center space-x-3">
-            <div className="flex items-center space-x-2 text-sm text-slate-500 bg-white px-4 py-2 rounded-full shadow-sm">
+            <div className="flex items-center space-x-2 text-sm text-slate-500 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-200">
               <Clock className="w-4 h-4" />
-              <span>Ticket Snapshot ({tickets.length} tickets)</span>
+              <span className="font-semibold text-slate-700">{tickets.length}</span>
+              <span>Tickets Loaded</span>
             </div>
             <button 
               onClick={() => handleExportImage('view-dashboard', `Dashboard_${new Date().toISOString().split('T')[0]}.png`)}
@@ -860,7 +958,7 @@ export default function App() {
           </div>
           <div 
               className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center space-x-4 cursor-pointer hover:border-amber-300 transition-colors"
-              onClick={() => drillDownToRegistry('status', 'OPEN')}
+              onClick={() => drillDownToRegistry({ status: 'OPEN' })}
               title="Click to view Open Tickets"
           >
             <div className="p-4 bg-amber-50 text-amber-600 rounded-xl"><AlertTriangle className="w-6 h-6" /></div>
@@ -900,7 +998,7 @@ export default function App() {
                       fill="#3b82f6" 
                       radius={[4, 4, 0, 0]} 
                       barSize={40} 
-                      onClick={(data) => drillDownToRegistry('category', data.name.replace(/ /g, '_'))}
+                      onClick={(data) => drillDownToRegistry({ category: data.name.replace(/ /g, '_') })}
                       className="cursor-pointer hover:opacity-80"
                   />
                 </BarChart>
@@ -917,7 +1015,7 @@ export default function App() {
                   <Pie 
                       data={zoneData} 
                       cx="50%" cy="50%" innerRadius={80} outerRadius={110} paddingAngle={2} dataKey="count"
-                      onClick={(data) => drillDownToRegistry('zone', data.name)}
+                      onClick={(data) => drillDownToRegistry({ zone: data.name })}
                       className="cursor-pointer hover:opacity-80"
                   >
                     {zoneData.map((entry, index) => (
@@ -987,7 +1085,7 @@ export default function App() {
                       fill="#f59e0b" 
                       radius={[4, 4, 0, 0]} 
                       barSize={30} 
-                      onClick={(data) => drillDownToRegistry('block', data.name)}
+                      onClick={(data) => drillDownToRegistry({ block: data.name })}
                       className="cursor-pointer hover:opacity-80"
                   />
                 </BarChart>
@@ -999,6 +1097,139 @@ export default function App() {
       </div>
     );
   };
+
+  const renderTrends = () => (
+    <div id="view-trends" className="space-y-6 p-2 -m-2 rounded">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800">Trend Analysis</h2>
+          <p className="text-slate-500 mt-1">Timeline trends for ageing, blocks, categories, and sub-categories.</p>
+        </div>
+        <button 
+          onClick={() => handleExportImage('view-trends', `Trends_${new Date().toISOString().split('T')[0]}.png`)}
+          className="export-btn-hide flex items-center space-x-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-4 py-2 rounded-full shadow-sm text-sm font-medium transition-colors"
+          title="Export Trends View as Image"
+        >
+          <Camera className="w-4 h-4" />
+          <span>Screenshot</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* Ageing Trend */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col lg:col-span-2">
+          <h3 className="text-lg font-semibold text-slate-800 mb-6">Average Ageing (TAT in Hours) Over Time</h3>
+          <div className="flex-1 w-full min-h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
+                <RechartsTooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                <Line 
+                  type="monotone" 
+                  dataKey="avgTat" 
+                  name="Avg TAT (Hrs)" 
+                  stroke="#ef4444" 
+                  strokeWidth={3} 
+                  dot={{r: 4, strokeWidth: 2}} 
+                  activeDot={{r: 6}} 
+                  onClick={(data) => drillDownToRegistry({ date: data.payload.date })} 
+                  className="cursor-pointer hover:opacity-80" 
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-xs text-center text-slate-400 mt-2">Click on a data point to drill down by date</p>
+        </div>
+
+        {/* Category Trend */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
+          <h3 className="text-lg font-semibold text-slate-800 mb-6">Volume Trend by Category</h3>
+          <div className="flex-1 w-full min-h-[350px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10}} interval={0} angle={-45} textAnchor="end" height={80} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
+                <RechartsTooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '10px'}} />
+                {topCategoriesKeys.map((key, idx) => (
+                  <Bar 
+                    key={key} 
+                    dataKey={key} 
+                    stackId="a" 
+                    fill={COLORS[idx % COLORS.length]} 
+                    onClick={(data) => drillDownToRegistry({date: data.payload.date, category: key.replace(/ /g, '_')})} 
+                    className="cursor-pointer hover:opacity-80" 
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-xs text-center text-slate-400 mt-2">Click on a stack segment to filter by date and category</p>
+        </div>
+
+        {/* SubCategory Trend */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
+          <h3 className="text-lg font-semibold text-slate-800 mb-6">Trend by Top 10 Sub-Categories</h3>
+          <div className="flex-1 w-full min-h-[350px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10}} interval={0} angle={-45} textAnchor="end" height={80} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
+                <RechartsTooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '10px'}} />
+                {topSubCategoriesKeys.map((key, idx) => (
+                  <Bar 
+                    key={key} 
+                    dataKey={`sub_${key}`} 
+                    name={key} 
+                    stackId="a" 
+                    fill={COLORS[idx % COLORS.length]} 
+                    onClick={(data) => drillDownToRegistry({date: data.payload.date, subCategory: key.replace(/ /g, '_')})} 
+                    className="cursor-pointer hover:opacity-80" 
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-xs text-center text-slate-400 mt-2">Click on a stack segment to filter by date and sub-category</p>
+        </div>
+
+        {/* Block Trend */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col lg:col-span-2">
+          <h3 className="text-lg font-semibold text-slate-800 mb-6">Trend by Top 10 Affected Blocks</h3>
+          <div className="flex-1 w-full min-h-[350px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10}} interval={0} angle={-45} textAnchor="end" height={80} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} />
+                <RechartsTooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{fontSize: '10px'}} />
+                {topBlocksKeys.map((key, idx) => (
+                  <Bar 
+                    key={key} 
+                    dataKey={`blk_${key}`} 
+                    name={key} 
+                    stackId="a" 
+                    fill={COLORS[idx % COLORS.length]} 
+                    onClick={(data) => drillDownToRegistry({date: data.payload.date, block: key})} 
+                    className="cursor-pointer hover:opacity-80" 
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-xs text-center text-slate-400 mt-2">Click on a stack segment to filter by date and block</p>
+        </div>
+
+      </div>
+    </div>
+  );
 
   const renderEfficiency = () => (
     <div id="view-efficiency" className="space-y-6 p-2 -m-2 rounded">
@@ -1159,8 +1390,9 @@ export default function App() {
       const matchesCategory = filterCategory === 'ALL' || t.category === filterCategory;
       const matchesSubCategory = filterSubCategory === 'ALL' || t.subCategory === filterSubCategory;
       const matchesStatus = filterStatus === 'ALL' || t.state === filterStatus;
+      const matchesDate = filterDate === 'ALL' || t.created === filterDate;
 
-      return matchesSearch && matchesZone && matchesBlock && matchesCategory && matchesSubCategory && matchesStatus;
+      return matchesSearch && matchesZone && matchesBlock && matchesCategory && matchesSubCategory && matchesStatus && matchesDate;
     });
 
     return (
@@ -1198,6 +1430,15 @@ export default function App() {
             <Filter className="w-4 h-4" />
             <span>Filters:</span>
           </div>
+
+          <select 
+            value={filterDate} 
+            onChange={(e) => setFilterDate(e.target.value)}
+            className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2 max-w-[150px] truncate"
+          >
+            <option value="ALL">All Dates</option>
+            {getUniqueDates.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
           
           <select 
             value={filterZone} 
@@ -1321,6 +1562,7 @@ export default function App() {
       {renderSidebar()}
       <div className="flex-1 ml-64 p-8">
         {activeTab === 'dashboard' && renderDashboard()}
+        {activeTab === 'trends' && renderTrends()}
         {activeTab === 'efficiency' && renderEfficiency()}
         {activeTab === 'zones' && renderZoneConfig()}
         {activeTab === 'tickets' && renderTicketRegistry()}
