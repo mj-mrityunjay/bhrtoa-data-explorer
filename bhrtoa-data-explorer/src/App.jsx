@@ -5,66 +5,106 @@ import {
 } from 'recharts';
 import { 
   LayoutDashboard, Map, TrendingUp, ListTodo, AlertTriangle, 
-  CheckCircle, Clock, Upload, Search, Building, Save, Download, CalendarRange 
+  CheckCircle, Clock, Upload, Search, Building, Save, Download, CalendarRange, Trash2
 } from 'lucide-react';
 
-// --- CSV PARSER UTILITY FOR NBH REPORTS ---
-const parseCSVRow = (str) => {
+// --- ROBUST CSV PARSER ---
+// This parser correctly handles CSV cells containing newlines, commas inside quotes, and escaped quotes.
+const parseCSV = (text) => {
     const result = [];
+    let row = [];
     let curVal = '';
     let inQuotes = false;
-    for (let i = 0; i < str.length; i++) {
+    
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const nextChar = text[i + 1];
+
         if (inQuotes) {
-            if (str[i] === '"') {
-                if (str[i + 1] === '"') { curVal += '"'; i++; }
-                else { inQuotes = false; }
-            } else { curVal += str[i]; }
+            if (char === '"' && nextChar === '"') {
+                curVal += '"';
+                i++; // Skip the escaped quote
+            } else if (char === '"') {
+                inQuotes = false;
+            } else {
+                curVal += char;
+            }
         } else {
-            if (str[i] === '"') { inQuotes = true; }
-            else if (str[i] === ',') { result.push(curVal); curVal = ''; }
-            else { curVal += str[i]; }
+            if (char === '"') {
+                inQuotes = true;
+            } else if (char === ',') {
+                row.push(curVal);
+                curVal = '';
+            } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+                if (char === '\r') i++; // Skip \n of \r\n
+                row.push(curVal);
+                result.push(row);
+                row = [];
+                curVal = '';
+            } else if (char !== '\r') {
+                curVal += char;
+            }
         }
     }
-    result.push(curVal);
+    if (curVal !== '' || text[text.length - 1] === ',' || row.length > 0) {
+        row.push(curVal);
+        result.push(row);
+    }
     return result;
 };
 
 const parseNBHReport = (csvText) => {
-    const lines = csvText.split('\n').filter(l => l.trim().length > 0);
-    if (lines.length === 0) return [];
+    const rows = parseCSV(csvText).filter(r => r.length > 0 && r.some(c => c && c.trim() !== ''));
+    if (rows.length === 0) return [];
 
-    const headers = parseCSVRow(lines[0]).map(h => h.trim());
+    // Strip BOM from the first header just in case, and trim headers
+    const headers = rows[0].map(h => h ? h.trim().replace(/^\uFEFF/, '') : '');
     const data = [];
 
-    for (let i = 1; i < lines.length; i++) {
-        const row = parseCSVRow(lines[i]);
+    for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
         const rowData = {};
         headers.forEach((header, index) => {
             rowData[header] = row[index] ? row[index].trim() : null;
         });
 
+        // Calculate TAT in hours (NBH Format: "6d 04h 14m" or "188h:38m:42s")
         let tatHours = null;
-        if (rowData['Resolve Time (DD-HH-MM)']) {
-            const match = rowData['Resolve Time (DD-HH-MM)'].match(/(\d+)d\s+(\d+)h\s+(\d+)m/);
-            if (match) {
-                tatHours = parseInt(match[1], 10) * 24 + parseInt(match[2], 10) + (parseInt(match[3], 10) / 60);
+        const tatStr = rowData['Resolve Time (DD-HH-MM)'] || rowData['TAT_IN_Days_Hours'] || rowData['TAT_IN_HHMMSS'];
+        if (tatStr) {
+            const daysMatch = tatStr.match(/(\d+)d\s+(\d+)h\s+(\d+)m/);
+            if (daysMatch) {
+                tatHours = parseInt(daysMatch[1], 10) * 24 + parseInt(daysMatch[2], 10) + (parseInt(daysMatch[3], 10) / 60);
+            } else {
+                const hrsMatch = tatStr.match(/(\d+)h:(\d+)m:(\d+)s/);
+                if (hrsMatch) {
+                    tatHours = parseInt(hrsMatch[1], 10) + (parseInt(hrsMatch[2], 10) / 60);
+                }
             }
         }
 
+        // Resilient field mappings across different NBH export versions
+        const ticketId = rowData['Ticket ID'] || rowData['Ticket Id'] || rowData['ticket_id'] || rowData['Ticket_ID'];
+        const loc = rowData['Issue Location'] || rowData['Unit'] || rowData['Issue_Location'];
+        const cat = rowData['Category'] || rowData['category'] || rowData['Ticket_Category'];
+        const prio = rowData['Priority'] || rowData['admin_priority'];
+        const state = rowData['State'] || rowData['state'] || rowData['Status'] || rowData['Ticket_State'];
+        const createdOnRaw = rowData['Created On'] || rowData['Created_Date'] || rowData['Ticket_Created_On'] || rowData['created_on'];
+
         let block = 'Unknown';
-        if (rowData['Issue Location']) {
-             block = rowData['Issue Location'].split('-')[0];
+        if (loc) {
+             block = loc.split('-')[0];
         }
 
-        if (rowData['Ticket ID']) {
+        if (ticketId) {
             data.push({
-                id: rowData['Ticket ID'],
+                id: ticketId,
                 block: block,
-                unit: rowData['Issue Location'],
-                category: rowData['Category'] ? rowData['Category'].toUpperCase().replace(/\s+/g, '_') : 'UNKNOWN',
-                priority: rowData['Priority'] ? rowData['Priority'].toUpperCase() : 'LOW',
-                state: rowData['State'] ? rowData['State'].toUpperCase() : 'OPEN',
-                created: rowData['Created On'] ? rowData['Created On'].split(' ')[0] : 'N/A',
+                unit: loc || 'Unknown',
+                category: cat ? cat.toUpperCase().replace(/\s+/g, '_') : 'UNKNOWN',
+                priority: prio ? prio.toUpperCase() : 'LOW',
+                state: state ? state.toUpperCase() : 'OPEN',
+                created: createdOnRaw ? createdOnRaw.split(' ')[0] : 'N/A',
                 tatHours: tatHours
             });
         }
@@ -174,65 +214,97 @@ export default function App() {
   };
 
   // --- HANDLERS ---
-  const handleFileUpload = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
+  const handleFileUpload = async (event) => {
+    const files = Array.from(event.target.files);
+    if (files.length === 0) return;
 
     setIsUploading(true);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        const text = e.target.result;
-        try {
+    
+    try {
+        // Read all files simultaneously
+        const readPromises = files.map(file => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(e);
+                reader.readAsText(file);
+            });
+        });
+
+        const fileContents = await Promise.all(readPromises);
+        let allNewTickets = [];
+
+        // Parse each file and combine the results
+        for (const text of fileContents) {
             const newTickets = parseNBHReport(text);
-            
-            if(newTickets.length > 0) {
-                // Calculate Min/Max dates to prevent duplicate overlaps
-                const dateValues = newTickets
-                  .map(t => new Date(t.created).getTime())
-                  .filter(t => !isNaN(t));
-
-                let start = 'Unknown', end = 'Unknown', hasOverlap = false;
-
-                if (dateValues.length > 0) {
-                    start = new Date(Math.min(...dateValues)).toISOString().split('T')[0];
-                    end = new Date(Math.max(...dateValues)).toISOString().split('T')[0];
-
-                    if (!isMockData) {
-                        hasOverlap = loadedDateRanges.some(range => {
-                            return (start <= range.end && end >= range.start);
-                        });
-                    }
-                }
-
-                if (hasOverlap) {
-                    alert(`⚠️ OVERLAP DETECTED!\n\nThis file covers ${start} to ${end}. You already have overlapping data loaded. Please upload only unique time periods to avoid duplicate records.`);
-                    setIsUploading(false);
-                    return;
-                }
-
-                if (isMockData) {
-                    setTickets(newTickets);
-                    setLoadedDateRanges(start !== 'Unknown' ? [{ start, end }] : []);
-                    setIsMockData(false);
-                } else {
-                    setTickets(prev => [...prev, ...newTickets]);
-                    if (start !== 'Unknown') {
-                        setLoadedDateRanges(prev => 
-                           [...prev, { start, end }].sort((a, b) => a.start.localeCompare(b.start))
-                        );
-                    }
-                }
-            } else {
-                alert("No tickets found. Please ensure it is the NBH Complaint Ageing Report.");
-            }
-        } catch (err) {
-            console.error(err);
-            alert("Error parsing CSV. Please ensure it's a valid NBH Ageing Report.");
+            allNewTickets = [...allNewTickets, ...newTickets];
         }
-        setIsUploading(false);
-        event.target.value = ''; // Reset input
-    };
-    reader.readAsText(file);
+
+        if (allNewTickets.length > 0) {
+            // Deduplicate tickets internally in case multiple files contain the same ticket ID
+            const uniqueTicketsMap = new Map();
+            allNewTickets.forEach(t => uniqueTicketsMap.set(t.id, t));
+            const uniqueNewTickets = Array.from(uniqueTicketsMap.values());
+
+            // Calculate Min/Max dates to prevent duplicate overlaps with previously loaded data
+            const dateValues = uniqueNewTickets
+              .map(t => new Date(t.created).getTime())
+              .filter(t => !isNaN(t));
+
+            let start = 'Unknown', end = 'Unknown', hasOverlap = false;
+
+            if (dateValues.length > 0) {
+                start = new Date(Math.min(...dateValues)).toISOString().split('T')[0];
+                end = new Date(Math.max(...dateValues)).toISOString().split('T')[0];
+
+                if (!isMockData) {
+                    hasOverlap = loadedDateRanges.some(range => {
+                        return (start <= range.end && end >= range.start);
+                    });
+                }
+            }
+
+            if (hasOverlap) {
+                alert(`⚠️ OVERLAP DETECTED!\n\nThe uploaded file(s) cover ${start} to ${end}. You already have overlapping data loaded. Please upload only unique time periods to avoid duplicate records.`);
+                setIsUploading(false);
+                event.target.value = ''; // Reset input
+                return;
+            }
+
+            if (isMockData) {
+                setTickets(uniqueNewTickets);
+                setLoadedDateRanges(start !== 'Unknown' ? [{ start, end }] : []);
+                setIsMockData(false);
+            } else {
+                // Filter out existing IDs just in case there's overlap in identical ticket IDs
+                const existingIds = new Set(tickets.map(t => t.id));
+                const trulyNewTickets = uniqueNewTickets.filter(t => !existingIds.has(t.id));
+                
+                setTickets(prev => [...prev, ...trulyNewTickets]);
+                if (start !== 'Unknown') {
+                    setLoadedDateRanges(prev => 
+                       [...prev, { start, end }].sort((a, b) => a.start.localeCompare(b.start))
+                    );
+                }
+            }
+        } else {
+            alert("No tickets found. Please ensure they are valid NBH Ticket Export Reports.");
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error parsing CSV files. Please ensure they are valid NBH Ageing Reports.");
+    }
+
+    setIsUploading(false);
+    event.target.value = ''; // Reset input
+  };
+
+  const handleClearData = () => {
+    if (window.confirm("Are you sure you want to clear all loaded ticket data? This cannot be undone.")) {
+      setTickets([]);
+      setLoadedDateRanges([]);
+      setIsMockData(false); // Make sure we don't go back to mock data
+    }
   };
 
   const handleExport = () => {
@@ -358,20 +430,26 @@ export default function App() {
         </button>
       </nav>
 
-      <div className="p-4 border-t border-slate-800 space-y-3">
+      <div className="p-4 border-t border-slate-800 space-y-2">
          <label className="flex items-center justify-center space-x-2 bg-slate-800 hover:bg-slate-700 text-white px-4 py-3 rounded-lg cursor-pointer transition-colors w-full">
             <Upload className="w-4 h-4" />
-            <span className="text-sm font-medium">{isUploading ? 'Loading...' : 'Upload More Data'}</span>
-            <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+            <span className="text-sm font-medium">{isUploading ? 'Loading...' : 'Upload Report CSVs'}</span>
+            <input type="file" accept=".csv" multiple className="hidden" onChange={handleFileUpload} />
          </label>
          
-         <button onClick={handleExport} className="flex items-center justify-center space-x-2 bg-blue-900/40 hover:bg-blue-900/80 text-blue-300 hover:text-blue-200 border border-blue-800/50 px-4 py-3 rounded-lg cursor-pointer transition-colors w-full">
-            <Download className="w-4 h-4" />
-            <span className="text-sm font-medium">Export Combined CSV</span>
-         </button>
+         <div className="flex space-x-2">
+           <button onClick={handleExport} className="flex-1 flex items-center justify-center space-x-2 bg-blue-900/40 hover:bg-blue-900/80 text-blue-300 hover:text-blue-200 border border-blue-800/50 px-2 py-3 rounded-lg cursor-pointer transition-colors" title="Export CSV">
+              <Download className="w-4 h-4" />
+              <span className="text-xs font-medium">Export</span>
+           </button>
+           <button onClick={handleClearData} className="flex-1 flex items-center justify-center space-x-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 hover:text-red-300 border border-red-800/30 px-2 py-3 rounded-lg cursor-pointer transition-colors" title="Clear All Data">
+              <Trash2 className="w-4 h-4" />
+              <span className="text-xs font-medium">Clear</span>
+           </button>
+         </div>
          
          {!isMockData && loadedDateRanges.length > 0 && (
-           <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+           <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 mt-3">
              <div className="flex items-center space-x-2 text-slate-400 mb-2">
                <CalendarRange className="w-4 h-4" />
                <span className="text-xs font-semibold uppercase tracking-wider">Loaded Periods</span>
