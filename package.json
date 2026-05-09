@@ -16,7 +16,8 @@
     "lucide-react": "^1.14.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -30,7 +31,7 @@
     "gh-pages": "^6.3.0",
     "globals": "^17.5.0",
     "postcss": "^8.5.14",
-    "tailwind": "^4.0.0",
+    "tailwind": "^2.3.1",
     "tailwindcss": "^3.4.19",
     "vite": "^8.0.10"
   }
