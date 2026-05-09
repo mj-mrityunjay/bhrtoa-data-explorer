@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://mj-mrityunjay.github.io/bhrtoa-data-explorer/bhrtoa-data-explorer",
+  "homepage": "https://mj-mrityunjay.github.io/bhrtoa-data-explorer",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
